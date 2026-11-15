@@ -433,10 +433,32 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      session.mode = action === "mode_normal" ? "normal" : "embed";
-      await interaction.showModal(
-        session.mode === "normal" ? buildNormalModal(sessionId) : buildEmbedModal(sessionId)
-      );
+      if (action === "mode_normal") {
+        session.mode = "normal";
+        session.mention = "";
+
+        if (session.body.length > 1900) {
+          await interaction.reply({ content: "الرسالة العادية طويلة جدًا. الحد الأقصى 1900 حرف.", ephemeral: true });
+          return;
+        }
+
+        const target = await fetchTargetChannel(session.targetChannelId);
+        const mentionData = parseMention("", target.guild);
+
+        await target.send(buildPayload(session, mentionData));
+        await writeLog(session, "SUCCESS");
+        sessions.delete(sessionId);
+
+        await interaction.update({
+          content: `✅ تم إرسال الرسالة العادية بنجاح في <#${target.id}>.`,
+          embeds: [],
+          components: []
+        });
+        return;
+      }
+
+      session.mode = "embed";
+      await interaction.showModal(buildEmbedModal(sessionId));
       return;
     }
 
