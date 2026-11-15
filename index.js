@@ -408,7 +408,7 @@ client.on(Events.MessageCreate, async (message) => {
         mention: ""
       };
 
-      await writeLog(deniedSession, "DENIED", "A user without the required role tried to use the announcement bot.");
+      await writeLog(deniedSession, "DENIED", "شخص لا يمتلك الرتبة المطلوبة حاول استخدام بوت الإعلانات.");
 
       const denialReply = await message.reply({
         content: "⛔ ليس لديك صلاحية استخدام البوت.",
