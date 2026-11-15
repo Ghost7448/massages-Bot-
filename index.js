@@ -84,6 +84,10 @@ function createSession(message) {
     id: message.id,
     sourceUserId: message.author.id,
     sourceUserTag: message.author.tag,
+    sourceUsername: message.author.username,
+    sourceChannelId: message.channel.id,
+    sourceMessageId: message.id,
+    setupMessageId: null,
     body: message.content.trim(),
     targetChannelId: null,
     mode: null,
@@ -291,6 +295,30 @@ async function fetchTargetChannel(channelId) {
   return channel;
 }
 
+function scheduleSessionCleanup(session, interaction = null) {
+  setTimeout(async () => {
+    try {
+      const channel = await client.channels.fetch(session.sourceChannelId);
+      if (channel?.isTextBased()) {
+        const sourceMessage = await channel.messages.fetch(session.sourceMessageId).catch(() => null);
+        if (sourceMessage) await sourceMessage.delete().catch(() => {});
+
+        if (session.setupMessageId) {
+          const setupMessage = await channel.messages.fetch(session.setupMessageId).catch(() => null);
+          if (setupMessage) await setupMessage.delete().catch(() => {});
+        }
+      }
+    } catch (error) {
+      console.error("[CLEANUP] Could not delete control messages:", error.message);
+    }
+
+    // Also remove the ephemeral preview / ID-selection response when one exists.
+    if (interaction?.isRepliable?.() && interaction.webhook) {
+      await interaction.deleteReply().catch(() => {});
+    }
+  }, 10000);
+}
+
 async function writeLog(session, status, details = "") {
   try {
     const logGuild = await client.guilds.fetch(config.logsGuildId);
@@ -303,8 +331,12 @@ async function writeLog(session, status, details = "") {
 
     const embed = new EmbedBuilder()
       .setColor(status === "SUCCESS" ? COLORS.success : COLORS.danger)
-      .setTitle(status === "SUCCESS" ? "Announcement Sent" : "Announcement Failed")
+      .setTitle(
+        status === "SUCCESS" ? "Announcement Sent" :
+        status === "DENIED" ? "Unauthorized Attempt" : "Announcement Failed"
+      )
       .addFields(
+        { name: "By", value: `<@!${session.sourceUserId}>\nUsername: ${session.sourceUsername || session.sourceUserTag}\nID: ${session.sourceUserId}`, inline: false },
         { name: "User", value: `${session.sourceUserTag}\n\`${session.sourceUserId}\``, inline: true },
         { name: "Type", value: session.mode || "Not selected", inline: true },
         { name: "Target Channel", value: session.targetChannelId ? `<#${session.targetChannelId}>` : "Not selected", inline: true },
@@ -331,10 +363,26 @@ client.on(Events.MessageCreate, async (message) => {
     if (message.channel.id !== config.controlChannelId) return;
 
     if (!hasAccess(message.member)) {
-      await message.reply({
+      const deniedSession = {
+        sourceUserId: message.author.id,
+        sourceUserTag: message.author.tag,
+        sourceUsername: message.author.username,
+        sourceChannelId: message.channel.id,
+        sourceMessageId: message.id,
+        sourceUserMention: `<@!${message.author.id}>`,
+        body: message.content.trim(),
+        mode: "Unauthorized attempt",
+        targetChannelId: null,
+        mention: ""
+      };
+
+      await writeLog(deniedSession, "DENIED", "A user without the required role tried to use the announcement bot.");
+
+      const denialReply = await message.reply({
         content: "⛔ ليس لديك صلاحية استخدام البوت.",
         allowedMentions: { repliedUser: false }
       });
+      setTimeout(() => denialReply.delete().catch(() => {}), 10000);
       return;
     }
 
@@ -345,11 +393,12 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const session = createSession(message);
-    await message.reply({
+    const setupMessage = await message.reply({
       content: "📢 **تم استلام رسالتك. اختار التشانل اللي عايز تبعت فيه:**",
       components: buildStartRows(session.id),
       allowedMentions: { repliedUser: false }
     });
+    session.setupMessageId = setupMessage.id;
   } catch (error) {
     console.error("[MESSAGE]", error);
     await message.reply("حصل خطأ وأنا بجهز الرسالة. راجع لوجات البوت.").catch(() => {});
@@ -454,6 +503,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           embeds: [],
           components: []
         });
+        scheduleSessionCleanup(session, interaction);
         return;
       }
 
@@ -559,6 +609,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           embeds: [],
           components: []
         });
+        scheduleSessionCleanup(session, interaction);
       } catch (sendError) {
         await writeLog(session, "FAILED", sendError.message);
         throw sendError;
