@@ -54,6 +54,7 @@ const client = new Client({
 
 // Drafts are temporary. Restarting the bot clears unfinished requests.
 const sessions = new Map();
+const pendingCleanupTimers = new Map();
 
 const COLORS = {
   primary: 0x5865F2,
@@ -254,14 +255,14 @@ function buildEmbedModal(sessionId) {
 }
 
 function buildPayload(session, mentionData) {
-  const body = sanitizeBody(session.body);
-
   if (session.mode === "normal") {
     return {
-      content: [mentionData.content, body].filter(Boolean).join("\n"),
-      allowedMentions: mentionData.allowedMentions
+      content: session.body,
+      allowedMentions: { parse: ["everyone", "users", "roles"] }
     };
   }
+
+  const body = sanitizeBody(session.body);
 
   const embed = new EmbedBuilder()
     .setDescription(body || "*رسالة بدون نص*")
@@ -293,6 +294,37 @@ async function fetchTargetChannel(channelId) {
   }
 
   return channel;
+}
+
+function clearPendingCleanup(sessionId) {
+  const timer = pendingCleanupTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  pendingCleanupTimers.delete(sessionId);
+}
+
+function schedulePendingCleanup(session) {
+  clearPendingCleanup(session.id);
+  const timer = setTimeout(async () => {
+    pendingCleanupTimers.delete(session.id);
+    sessions.delete(session.id);
+
+    try {
+      const channel = await client.channels.fetch(session.sourceChannelId);
+      if (!channel?.isTextBased()) return;
+
+      const sourceMessage = await channel.messages.fetch(session.sourceMessageId).catch(() => null);
+      if (sourceMessage) await sourceMessage.delete().catch(() => {});
+
+      if (session.setupMessageId) {
+        const setupMessage = await channel.messages.fetch(session.setupMessageId).catch(() => null);
+        if (setupMessage) await setupMessage.delete().catch(() => {});
+      }
+    } catch (error) {
+      console.error("[INACTIVITY CLEANUP] Could not delete control messages:", error.message);
+    }
+  }, 60000);
+
+  pendingCleanupTimers.set(session.id, timer);
 }
 
 function scheduleSessionCleanup(session, interaction = null) {
@@ -329,23 +361,23 @@ async function writeLog(session, status, details = "") {
       return;
     }
 
+    const statusTitle =
+      status === "SUCCESS" ? "تم إرسال الإعلان بنجاح" :
+      status === "DENIED" ? "محاولة استخدام بدون صلاحية" : "فشل إرسال الإعلان";
+
     const embed = new EmbedBuilder()
       .setColor(status === "SUCCESS" ? COLORS.success : COLORS.danger)
-      .setTitle(
-        status === "SUCCESS" ? "Announcement Sent" :
-        status === "DENIED" ? "Unauthorized Attempt" : "Announcement Failed"
-      )
+      .setTitle(statusTitle)
       .addFields(
-        { name: "By", value: `<@!${session.sourceUserId}>\nUsername: ${session.sourceUsername || session.sourceUserTag}\nID: ${session.sourceUserId}`, inline: false },
-        { name: "User", value: `${session.sourceUserTag}\n\`${session.sourceUserId}\``, inline: true },
-        { name: "Type", value: session.mode || "Not selected", inline: true },
-        { name: "Target Channel", value: session.targetChannelId ? `<#${session.targetChannelId}>` : "Not selected", inline: true },
-        { name: "Mention", value: session.mention || "None", inline: true },
-        { name: "Message", value: (session.body || "Empty").slice(0, 1000) }
+        { name: "بواسطة", value: `<@!${session.sourceUserId}>\nاليوزر: ${session.sourceUsername || session.sourceUserTag}\nID: ${session.sourceUserId}`, inline: false },
+        { name: "نوع العملية", value: session.mode === "normal" ? "رسالة عادية" : session.mode === "embed" ? "Embed" : session.mode || "غير محدد", inline: true },
+        { name: "التشانل المستهدف", value: session.targetChannelId ? `<#${session.targetChannelId}>` : "غير محدد", inline: true },
+        { name: "المنشن", value: session.mention || "حسب محتوى الرسالة / بدون منشن", inline: true },
+        { name: "نص الرسالة", value: (session.body || "بدون نص").slice(0, 1000) }
       )
       .setTimestamp();
 
-    if (details) embed.addFields({ name: "Details", value: details.slice(0, 1000) });
+    if (details) embed.addFields({ name: "التفاصيل", value: details.slice(0, 1000) });
     await logChannel.send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch (error) {
     console.error("[LOG] Could not write log:", error.message);
@@ -382,7 +414,10 @@ client.on(Events.MessageCreate, async (message) => {
         content: "⛔ ليس لديك صلاحية استخدام البوت.",
         allowedMentions: { repliedUser: false }
       });
-      setTimeout(() => denialReply.delete().catch(() => {}), 10000);
+      setTimeout(async () => {
+        await message.delete().catch(() => {});
+        await denialReply.delete().catch(() => {});
+      }, 5000);
       return;
     }
 
@@ -399,6 +434,7 @@ client.on(Events.MessageCreate, async (message) => {
       allowedMentions: { repliedUser: false }
     });
     session.setupMessageId = setupMessage.id;
+    schedulePendingCleanup(session);
   } catch (error) {
     console.error("[MESSAGE]", error);
     await message.reply("حصل خطأ وأنا بجهز الرسالة. راجع لوجات البوت.").catch(() => {});
@@ -423,6 +459,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    schedulePendingCleanup(session);
     const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
     if (!member || !hasAccess(member)) {
       sessions.delete(sessionId);
@@ -496,6 +533,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await target.send(buildPayload(session, mentionData));
         await writeLog(session, "SUCCESS");
+        clearPendingCleanup(sessionId);
         sessions.delete(sessionId);
 
         await interaction.update({
@@ -603,6 +641,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       try {
         await target.send(buildPayload(session, mentionData));
         await writeLog(session, "SUCCESS");
+        clearPendingCleanup(sessionId);
         sessions.delete(sessionId);
         await interaction.update({
           content: `✅ تم إرسال الرسالة بنجاح في <#${target.id}>.`,
@@ -618,6 +657,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (action === "cancel" && interaction.isButton()) {
+      clearPendingCleanup(sessionId);
       sessions.delete(sessionId);
       await interaction.update({
         content: "❌ تم إلغاء الإرسال.",
