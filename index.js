@@ -369,7 +369,7 @@ async function writeLog(session, status, details = "") {
       .setColor(status === "SUCCESS" ? COLORS.success : COLORS.danger)
       .setTitle(statusTitle)
       .addFields(
-        { name: "بواسطة", value: `<@!${session.sourceUserId}>\nاليوزر: ${session.sourceUsername || session.sourceUserTag}\nID: ${session.sourceUserId}`, inline: false },
+        { name: "بواسطة", value: `<@!${session.sourceUserId}>\nuser: ${session.sourceUsername || session.sourceUserTag || "Unknown"}\nID: \`${session.sourceUserId}\``, inline: false },
         { name: "نوع العملية", value: session.mode === "normal" ? "رسالة عادية" : session.mode === "embed" ? "Embed" : session.mode || "غير محدد", inline: true },
         { name: "التشانل المستهدف", value: session.targetChannelId ? `<#${session.targetChannelId}>` : "غير محدد", inline: true },
         { name: "المنشن", value: session.mention || "حسب محتوى الرسالة / بدون منشن", inline: true },
