@@ -90,6 +90,11 @@ function createSession(message) {
     sourceMessageId: message.id,
     setupMessageId: null,
     body: message.content.trim(),
+    attachments: [...message.attachments.values()].map((file) => ({
+      url: file.url,
+      name: file.name || "attachment",
+      contentType: file.contentType || ""
+    })),
     targetChannelId: null,
     mode: null,
     mention: "",
@@ -277,6 +282,38 @@ function buildPayload(session, mentionData) {
   };
 }
 
+async function sendMediaSession(session, target) {
+  if (!session.attachments?.length) return false;
+
+  if (session.attachments.length > 10) {
+    throw new Error("تقدر تبعت بحد أقصى 10 صور أو فيديوهات في الإعلان الواحد.");
+  }
+
+  const unsupported = session.attachments.filter((file) =>
+    !/^(image|video)\//i.test(file.contentType) &&
+    !/\.(png|jpe?g|gif|webp|bmp|mp4|mov|webm|m4v)$/i.test(file.name)
+  );
+  if (unsupported.length) {
+    throw new Error("المرفقات المدعومة حاليًا هي الصور والفيديوهات فقط.");
+  }
+
+  const me = await target.guild.members.fetchMe();
+  const permissions = target.permissionsFor(me);
+  if (!permissions?.has(PermissionsBitField.Flags.AttachFiles)) {
+    throw new Error("البوت محتاج صلاحية Attach Files في التشانل دي.");
+  }
+
+  await target.send({
+    content: session.body || undefined,
+    files: session.attachments.map((file) => ({ attachment: file.url, name: file.name })),
+    allowedMentions: { parse: ["everyone", "users", "roles"] }
+  });
+
+  session.mode = "media";
+  await writeLog(session, "SUCCESS");
+  return true;
+}
+
 async function fetchTargetChannel(channelId) {
   const guild = await client.guilds.fetch(config.mainGuildId);
   const channel = await guild.channels.fetch(channelId);
@@ -373,7 +410,12 @@ async function writeLog(session, status, details = "") {
         { name: "نوع العملية", value: session.mode === "normal" ? "رسالة عادية" : session.mode === "embed" ? "Embed" : session.mode || "غير محدد", inline: true },
         { name: "التشانل المستهدف", value: session.targetChannelId ? `<#${session.targetChannelId}>` : "غير محدد", inline: true },
         { name: "المنشن", value: session.mention || "حسب محتوى الرسالة / بدون منشن", inline: true },
-        { name: "نص الرسالة", value: (session.body || "بدون نص").slice(0, 1000) }
+        { name: "نص الرسالة", value: (session.body || "بدون نص").slice(0, 1000) },
+        ...(session.attachments?.length ? [{
+          name: "المرفقات",
+          value: session.attachments.map((file) => `📎 ${file.name}`).join("\n").slice(0, 1000),
+          inline: false
+        }] : [])
       )
       .setTimestamp();
 
@@ -422,8 +464,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     const body = message.content.trim();
-    if (!body) {
-      await message.reply("⚠️ ابعت نص الرسالة في رسالة نصية. المرفقات وحدها مش مدعومة حاليًا.");
+    const hasAttachments = message.attachments.size > 0;
+    if (!body && !hasAttachments) {
+      await message.reply("⚠️ ابعت نص الرسالة أو أرفق صورة/فيديو.");
       return;
     }
 
@@ -471,6 +514,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const target = await fetchTargetChannel(interaction.values[0]);
       session.targetChannelId = target.id;
 
+      if (session.attachments?.length) {
+        try {
+          await sendMediaSession(session, target);
+          clearPendingCleanup(sessionId);
+          sessions.delete(sessionId);
+          await interaction.update({
+            content: `✅ تم إرسال الصورة/الفيديو بنجاح في <#${target.id}>.`,
+            embeds: [],
+            components: []
+          });
+          scheduleSessionCleanup(session, interaction);
+        } catch (sendError) {
+          await writeLog(session, "FAILED", sendError.message);
+          throw sendError;
+        }
+        return;
+      }
+
       await interaction.update({
         content: `✅ التشانل المختار: <#${target.id}>\n\n**اختار شكل الرسالة:**`,
         components: buildModeRows(sessionId)
@@ -505,6 +566,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       const target = await fetchTargetChannel(channelId);
       session.targetChannelId = target.id;
+
+      if (session.attachments?.length) {
+        try {
+          await sendMediaSession(session, target);
+          clearPendingCleanup(sessionId);
+          sessions.delete(sessionId);
+          await interaction.reply({
+            content: `✅ تم إرسال الصورة/الفيديو بنجاح في <#${target.id}>.`,
+            ephemeral: true
+          });
+          scheduleSessionCleanup(session, interaction);
+        } catch (sendError) {
+          await writeLog(session, "FAILED", sendError.message);
+          throw sendError;
+        }
+        return;
+      }
+
       await interaction.reply({
         content: `✅ التشانل المختار: <#${target.id}>\n\n**اختار شكل الرسالة:**`,
         components: buildModeRows(sessionId),
