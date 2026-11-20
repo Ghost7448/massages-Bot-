@@ -407,7 +407,7 @@ async function writeLog(session, status, details = "") {
       .setTitle(statusTitle)
       .addFields(
         { name: "بواسطة", value: `<@!${session.sourceUserId}>\nuser: ${session.sourceUsername || session.sourceUserTag || "Unknown"}\nID: \`${session.sourceUserId}\``, inline: false },
-        { name: "نوع العملية", value: session.mode === "normal" ? "رسالة عادية" : session.mode === "embed" ? "Embed" : session.mode || "غير محدد", inline: true },
+        { name: "نوع العملية", value: session.mode === "normal" ? "رسالة عادية" : session.mode === "embed" ? "Embed" : session.mode === "media" ? "صورة / فيديو" : session.mode || "غير محدد", inline: true },
         { name: "التشانل المستهدف", value: session.targetChannelId ? `<#${session.targetChannelId}>` : "غير محدد", inline: true },
         { name: "المنشن", value: session.mention || "حسب محتوى الرسالة / بدون منشن", inline: true },
         { name: "نص الرسالة", value: (session.body || "بدون نص").slice(0, 1000) },
