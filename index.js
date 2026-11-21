@@ -68,13 +68,30 @@ function makeId(action, sessionId) {
 }
 
 function getSession(sessionId) {
-  const session = sessions.get(sessionId);
-  if (!session) return null;
-  if (Date.now() > session.expiresAt) {
-    sessions.delete(sessionId);
-    return null;
+  // Keep expired session metadata long enough to remove its original/setup messages.
+  return sessions.get(sessionId) || null;
+}
+
+async function deleteRequestMessages(session) {
+  if (!session) return;
+  try {
+    const channel = await client.channels.fetch(session.sourceChannelId);
+    if (!channel?.isTextBased()) return;
+
+    const ids = [session.sourceMessageId, session.setupMessageId].filter(Boolean);
+    for (const id of ids) {
+      const message = await channel.messages.fetch(id).catch(() => null);
+      if (message) await message.delete().catch(() => {});
+    }
+  } catch (error) {
+    console.error("[REQUEST CLEANUP] Could not delete request messages:", error.message);
   }
-  return session;
+}
+
+async function expireSession(sessionId, session) {
+  clearPendingCleanup(sessionId);
+  sessions.delete(sessionId);
+  await deleteRequestMessages(session);
 }
 
 function hasAccess(member) {
@@ -184,9 +201,15 @@ function buildStartRows(sessionId) {
     .setStyle(ButtonStyle.Secondary)
     .setEmoji("🆔");
 
+  const refreshButton = new ButtonBuilder()
+    .setCustomId(makeId("refresh_channels", sessionId))
+    .setLabel("تحديث التشانلات")
+    .setStyle(ButtonStyle.Primary)
+    .setEmoji("🔄");
+
   return [
     new ActionRowBuilder().addComponents(channelSelect),
-    new ActionRowBuilder().addComponents(idButton)
+    new ActionRowBuilder().addComponents(idButton, refreshButton)
   ];
 }
 
@@ -519,7 +542,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     if (!session) {
-      await interaction.reply({ content: "انتهت صلاحية الطلب. ابعت الرسالة من جديد.", ephemeral: true });
+      // The setup message itself is still available through the component interaction.
+      await interaction.reply({ content: "انتهت صلاحية الطلب. ابعت الرسالة من جديد.", ephemeral: true }).catch(() => {});
+      if (interaction.message) await interaction.message.delete().catch(() => {});
+      return;
+    }
+
+    if (Date.now() > session.expiresAt) {
+      await expireSession(sessionId, session);
+      await interaction.reply({ content: "انتهت صلاحية الطلب. ابعت الرسالة من جديد.", ephemeral: true }).catch(() => {});
       return;
     }
 
@@ -529,6 +560,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     schedulePendingCleanup(session);
+
+    if (action === "refresh_channels" && interaction.isButton()) {
+      await interaction.update({
+        content: "🔄 تم تحديث قائمة التشانلات. اختار التشانل اللي عايز تبعت فيه:",
+        components: buildStartRows(sessionId)
+      });
+      return;
+    }
+
     const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
     if (!member || !hasAccess(member)) {
       sessions.delete(sessionId);
