@@ -9,7 +9,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelSelectMenuBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -187,15 +188,46 @@ async function parseMention(raw, targetGuild) {
   };
 }
 
-function buildStartRows(sessionId) {
-  // A fresh component custom ID forces Discord to render a newly-built selector.
-  const refreshKey = Date.now().toString(36);
-  const channelSelect = new ChannelSelectMenuBuilder()
-    .setCustomId(`${makeId("choose_channel", sessionId)}:${refreshKey}`)
-    .setPlaceholder("اختار التشانل اللي هتتبعت فيه الرسالة")
-    .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+async function buildStartRows(sessionId, page = 0) {
+  const guild = await client.guilds.fetch(config.mainGuildId);
+  // Fetch the latest channel list from Discord instead of relying on the client's cached
+  // ChannelSelectMenu options. StringSelectMenu options are explicitly rebuilt each time.
+  const fetchedChannels = await guild.channels.fetch();
+  const channels = [...fetchedChannels.values()]
+    .filter((channel) =>
+      channel &&
+      [ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type) &&
+      channel.viewable
+    )
+    .sort((a, b) => a.rawPosition - b.rawPosition || a.name.localeCompare(b.name));
+
+  const pageSize = 25;
+  const pageCount = Math.max(1, Math.ceil(channels.length / pageSize));
+  const currentPage = Math.min(Math.max(0, Number(page) || 0), pageCount - 1);
+  const pageChannels = channels.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(makeId("choose_channel", sessionId))
+    .setPlaceholder(channels.length ? `اختار التشانل (صفحة ${currentPage + 1}/${pageCount})` : "مفيش تشانلات متاحة")
     .setMinValues(1)
     .setMaxValues(1);
+
+  if (pageChannels.length) {
+    select.addOptions(pageChannels.map((channel) =>
+      new StringSelectMenuOptionBuilder()
+        .setLabel(channel.name.slice(0, 100))
+        .setValue(channel.id)
+        .setDescription(`#${channel.name}`.slice(0, 100))
+    ));
+  } else {
+    select.addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel("لا توجد قنوات نصية متاحة")
+        .setValue("__none")
+        .setDescription("تأكد من صلاحيات البوت في السيرفر الأساسي")
+    );
+    select.setDisabled(true);
+  }
 
   const idButton = new ButtonBuilder()
     .setCustomId(makeId("channel_id", sessionId))
@@ -204,17 +236,35 @@ function buildStartRows(sessionId) {
     .setEmoji("🆔");
 
   const refreshButton = new ButtonBuilder()
-    .setCustomId(`${makeId("refresh_channels", sessionId)}:${refreshKey}`)
+    .setCustomId(makeId("refresh_channels", sessionId))
     .setLabel("تحديث التشانلات")
     .setStyle(ButtonStyle.Primary)
     .setEmoji("🔄");
 
-  return [
-    new ActionRowBuilder().addComponents(channelSelect),
+  const rows = [
+    new ActionRowBuilder().addComponents(select),
     new ActionRowBuilder().addComponents(idButton, refreshButton)
   ];
-}
 
+  if (pageCount > 1) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`channel_page:${sessionId}:${Math.max(0, currentPage - 1)}`)
+        .setLabel("السابق")
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("◀️")
+        .setDisabled(currentPage === 0),
+      new ButtonBuilder()
+        .setCustomId(`channel_page:${sessionId}:${Math.min(pageCount - 1, currentPage + 1)}`)
+        .setLabel("التالي")
+        .setStyle(ButtonStyle.Secondary)
+        .setEmoji("▶️")
+        .setDisabled(currentPage >= pageCount - 1)
+    ));
+  }
+
+  return rows;
+}
 function buildModeRows(sessionId) {
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -524,7 +574,7 @@ client.on(Events.MessageCreate, async (message) => {
     const session = createSession(message);
     const setupMessage = await message.reply({
       content: "📢 **تم استلام رسالتك. اختار التشانل اللي عايز تبعت فيه:**",
-      components: buildStartRows(session.id),
+      components: await buildStartRows(session.id),
       allowedMentions: { repliedUser: false }
     });
     session.setupMessageId = setupMessage.id;
@@ -539,7 +589,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const customId = interaction.customId || "";
   if (!customId.includes(":")) return;
 
-  const [action, sessionId] = customId.split(":");
+  const [action, sessionId, extra] = customId.split(":");
   const session = getSession(sessionId);
 
   try {
@@ -564,12 +614,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
     schedulePendingCleanup(session);
 
     if (action === "refresh_channels" && interaction.isButton()) {
-      // Force a fresh guild/channel fetch before rebuilding the select component.
-      const mainGuild = await client.guilds.fetch(config.mainGuildId);
-      await mainGuild.channels.fetch();
+      const rows = await buildStartRows(sessionId, 0);
       await interaction.update({
-        content: "✅ تم تحديث بيانات التشانلات. اختار التشانل اللي عايز تبعت فيه:",
-        components: buildStartRows(sessionId)
+        content: "🔄 تم جلب قائمة التشانلات من السيرفر. اختار التشانل اللي عايز تبعت فيه:",
+        components: rows
+      });
+      return;
+    }
+
+    if (action === "channel_page" && interaction.isButton()) {
+      const rows = await buildStartRows(sessionId, Number(extra) || 0);
+      await interaction.update({
+        content: "📢 اختار التشانل اللي عايز تبعت فيه:",
+        components: rows
       });
       return;
     }
