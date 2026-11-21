@@ -188,8 +188,10 @@ async function parseMention(raw, targetGuild) {
 }
 
 function buildStartRows(sessionId) {
+  // A fresh component custom ID forces Discord to render a newly-built selector.
+  const refreshKey = Date.now().toString(36);
   const channelSelect = new ChannelSelectMenuBuilder()
-    .setCustomId(makeId("choose_channel", sessionId))
+    .setCustomId(`${makeId("choose_channel", sessionId)}:${refreshKey}`)
     .setPlaceholder("اختار التشانل اللي هتتبعت فيه الرسالة")
     .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
     .setMinValues(1)
@@ -202,7 +204,7 @@ function buildStartRows(sessionId) {
     .setEmoji("🆔");
 
   const refreshButton = new ButtonBuilder()
-    .setCustomId(makeId("refresh_channels", sessionId))
+    .setCustomId(`${makeId("refresh_channels", sessionId)}:${refreshKey}`)
     .setLabel("تحديث التشانلات")
     .setStyle(ButtonStyle.Primary)
     .setEmoji("🔄");
@@ -562,8 +564,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
     schedulePendingCleanup(session);
 
     if (action === "refresh_channels" && interaction.isButton()) {
+      // Force a fresh guild/channel fetch before rebuilding the select component.
+      const mainGuild = await client.guilds.fetch(config.mainGuildId);
+      await mainGuild.channels.fetch();
       await interaction.update({
-        content: "🔄 تم تحديث قائمة التشانلات. اختار التشانل اللي عايز تبعت فيه:",
+        content: "✅ تم تحديث بيانات التشانلات. اختار التشانل اللي عايز تبعت فيه:",
         components: buildStartRows(sessionId)
       });
       return;
