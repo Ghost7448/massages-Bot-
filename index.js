@@ -638,7 +638,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
-    if (action === "choose_channel" && interaction.isChannelSelectMenu()) {
+    if (action === "choose_channel" && interaction.isStringSelectMenu()) {
+      if (interaction.values[0] === "__none") {
+        await interaction.reply({ content: "مفيش تشانلات متاحة للاختيار. اضغط تحديث التشانلات أو راجع صلاحيات البوت.", ephemeral: true });
+        return;
+      }
       const target = await fetchTargetChannel(interaction.values[0]);
       session.targetChannelId = target.id;
 
