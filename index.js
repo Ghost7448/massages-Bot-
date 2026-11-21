@@ -26,7 +26,8 @@ const config = {
   accessRoleId: process.env.ACCESS_ROLE_ID,
   logsGuildId: process.env.LOGS_GUILD_ID,
   logsChannelId: process.env.LOGS_CHANNEL_ID,
-  sessionTtlMs: Math.max(60000, Number(process.env.SESSION_TTL_MS) || 600000)
+  sessionTtlMs: Math.max(60000, Number(process.env.SESSION_TTL_MS) || 600000),
+  messageTtlMs: Math.max(60000, Number(process.env.MESSAGE_TTL_MS) || 600000)
 };
 
 const requiredConfig = [
@@ -140,7 +141,7 @@ async function parseMention(raw, targetGuild) {
   }
 
   // Accept raw user ID, <@USER_ID>, or <@!USER_ID>.
-  const userMatch = value.match(/^(?:<@!?(\\d{17,20})>|(\\d{17,20}))$/);
+  const userMatch = value.match(/^(?:<@!?(\d{17,20})>|(\d{17,20}))$/);
   if (userMatch) {
     const userId = userMatch[1] || userMatch[2];
     const member = await targetGuild.members.fetch(userId).catch(() => null);
@@ -312,11 +313,11 @@ async function sendMediaSession(session, target) {
     throw new Error("البوت محتاج صلاحية Attach Files في التشانل دي.");
   }
 
-  await target.send({
+  await sendAnnouncement(target, {
     content: session.body || undefined,
     files: session.attachments.map((file) => ({ attachment: file.url, name: file.name })),
     allowedMentions: { parse: ["everyone", "users", "roles"] }
-  });
+  }, session);
 
   session.mode = "media";
   await writeLog(session, "SUCCESS");
@@ -340,6 +341,22 @@ async function fetchTargetChannel(channelId) {
   }
 
   return channel;
+}
+
+async function sendAnnouncement(target, payload, session) {
+  const sentMessage = await target.send(payload);
+  session.sentMessageId = sentMessage.id;
+  session.sentChannelId = target.id;
+
+  // Delete the published announcement after MESSAGE_TTL_MS (10 minutes by default).
+  const timer = setTimeout(async () => {
+    await sentMessage.delete().catch((error) => {
+      console.error("[ANNOUNCEMENT EXPIRY] Could not delete published message:", error.message);
+    });
+  }, config.messageTtlMs);
+
+  if (typeof timer.unref === "function") timer.unref();
+  return sentMessage;
 }
 
 function clearPendingCleanup(sessionId) {
@@ -619,7 +636,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const target = await fetchTargetChannel(session.targetChannelId);
         const mentionData = await parseMention("", target.guild);
 
-        await target.send(buildPayload(session, mentionData));
+        await sendAnnouncement(target, buildPayload(session, mentionData), session);
         await writeLog(session, "SUCCESS");
         clearPendingCleanup(sessionId);
         sessions.delete(sessionId);
@@ -727,7 +744,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       try {
-        await target.send(buildPayload(session, mentionData));
+        await sendAnnouncement(target, buildPayload(session, mentionData), session);
         await writeLog(session, "SUCCESS");
         clearPendingCleanup(sessionId);
         sessions.delete(sessionId);
