@@ -140,19 +140,21 @@ async function parseMention(raw, targetGuild) {
   }
 
   // Accept raw user ID, <@USER_ID>, or <@!USER_ID>.
-  const userMatch = value.match(/^(?:<@!?(\d{17,20})>|(\d{17,20}))$/);
+  const userMatch = value.match(/^(?:<@!?(\\d{17,20})>|(\\d{17,20}))$/);
   if (userMatch) {
     const userId = userMatch[1] || userMatch[2];
     const member = await targetGuild.members.fetch(userId).catch(() => null);
-    if (!member) throw new Error("الشخص بالـ ID ده مش موجود في السيرفر الأساسي.");
-    return {
-      content: "<@" + userId + ">",
-      allowedMentions: { parse: [], users: [userId] },
-      description: "شخص: " + member.user.username + " (" + userId + ")",
-      type: "user"
-    };
+    if (member) {
+      return {
+        content: "<@" + userId + ">",
+        allowedMentions: { parse: [], users: [userId] },
+        description: "شخص: " + member.user.username + " (" + userId + ")",
+        type: "user"
+      };
+    }
+    // A plain numeric ID may instead be a role ID; explicit user mentions must resolve to a member.
+    if (value.startsWith("<@")) throw new Error("الشخص بالـ ID ده مش موجود في السيرفر الأساسي.");
   }
-
   // Accept raw role ID or <@&ROLE_ID>.
   const roleMatch = value.match(/^(?:<@&(\d{17,20})>|(\d{17,20}))$/);
   if (!roleMatch) throw new Error("المنشن غير صحيح. اكتب everyone أو ID شخص أو ID رول، أو اترك الخانة فاضية.");
