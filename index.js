@@ -28,7 +28,6 @@ const config = {
   logsGuildId: process.env.LOGS_GUILD_ID,
   logsChannelId: process.env.LOGS_CHANNEL_ID,
   sessionTtlMs: Math.max(60000, Number(process.env.SESSION_TTL_MS) || 600000),
-  messageTtlMs: Math.max(60000, Number(process.env.MESSAGE_TTL_MS) || 600000)
 };
 
 const requiredConfig = [
@@ -419,18 +418,11 @@ async function fetchTargetChannel(channelId) {
 }
 
 async function sendAnnouncement(target, payload, session) {
+  // Published announcements must remain in the destination channel.
+  // Only control/setup messages are cleaned up by the session cleanup routines.
   const sentMessage = await target.send(payload);
   session.sentMessageId = sentMessage.id;
   session.sentChannelId = target.id;
-
-  // Delete the published announcement after MESSAGE_TTL_MS (10 minutes by default).
-  const timer = setTimeout(async () => {
-    await sentMessage.delete().catch((error) => {
-      console.error("[ANNOUNCEMENT EXPIRY] Could not delete published message:", error.message);
-    });
-  }, config.messageTtlMs);
-
-  if (typeof timer.unref === "function") timer.unref();
   return sentMessage;
 }
 
