@@ -324,7 +324,7 @@ function buildConfirmRows(sessionId) {
 function buildMentionInput() {
   return new TextInputBuilder()
     .setCustomId("mention")
-    .setLabel("منشن (IDs مفصولة بفواصل)")
+    .setLabel("المنشن")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
     .setMaxLength(1000)
