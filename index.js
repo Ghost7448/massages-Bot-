@@ -175,7 +175,7 @@ async function parseMention(raw, targetGuild) {
     }
 
     // Accept raw user ID, <@USER_ID>, or <@!USER_ID>.
-    const userMatch = entry.match(/^(?:<@!?(\\d{17,20})>|(\\d{17,20}))$/);
+    const userMatch = entry.match(/^(?:<@!?(\d{17,20})>|(\d{17,20}))$/);
     if (userMatch) {
       const userId = userMatch[1] || userMatch[2];
       const member = await targetGuild.members.fetch(userId).catch(() => null);
@@ -192,7 +192,7 @@ async function parseMention(raw, targetGuild) {
     }
 
     // Accept raw role ID or <@&ROLE_ID>.
-    const roleMatch = entry.match(/^(?:<@&(\\d{17,20})>|(\\d{17,20}))$/);
+    const roleMatch = entry.match(/^(?:<@&(\d{17,20})>|(\d{17,20}))$/);
     if (!roleMatch) {
       throw new Error("المنشن غير صحيح: " + entry + ". افصل بين كل ID والتاني بفاصلة.");
     }
@@ -209,7 +209,7 @@ async function parseMention(raw, targetGuild) {
   return {
     content: contents.join(" "),
     allowedMentions: { parse: [], users, roles, ...(includesEveryone ? { parse: ["everyone"] } : {}) },
-    description: descriptions.join("\\n") || "بدون منشن",
+    description: descriptions.join("\n") || "بدون منشن",
     type: includesEveryone ? "everyone" : users.length && roles.length ? "multiple" : users.length ? "user" : roles.length ? "role" : "none"
   };
 }
