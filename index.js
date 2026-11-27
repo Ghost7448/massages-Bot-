@@ -153,37 +153,64 @@ async function parseMention(raw, targetGuild) {
     return { content: "", allowedMentions: { parse: [] }, description: "بدون منشن", type: "none" };
   }
 
-  if (value.toLowerCase() === "everyone") {
-    return { content: "@everyone", allowedMentions: { parse: ["everyone"] }, description: "@everyone", type: "everyone" };
+  const entries = value.split(",").map((item) => item.trim()).filter(Boolean);
+  if (!entries.length) {
+    return { content: "", allowedMentions: { parse: [] }, description: "بدون منشن", type: "none" };
   }
 
-  // Accept raw user ID, <@USER_ID>, or <@!USER_ID>.
-  const userMatch = value.match(/^(?:<@!?(\d{17,20})>|(\d{17,20}))$/);
-  if (userMatch) {
-    const userId = userMatch[1] || userMatch[2];
-    const member = await targetGuild.members.fetch(userId).catch(() => null);
-    if (member) {
-      return {
-        content: "<@" + userId + ">",
-        allowedMentions: { parse: [], users: [userId] },
-        description: "شخص: " + member.user.username + " (" + userId + ")",
-        type: "user"
-      };
+  const contents = [];
+  const users = [];
+  const roles = [];
+  const descriptions = [];
+  let includesEveryone = false;
+
+  for (const entry of entries) {
+    if (entry.toLowerCase() === "everyone") {
+      if (!includesEveryone) {
+        contents.push("@everyone");
+        descriptions.push("@everyone");
+        includesEveryone = true;
+      }
+      continue;
     }
-    // A plain numeric ID may instead be a role ID; explicit user mentions must resolve to a member.
-    if (value.startsWith("<@")) throw new Error("الشخص بالـ ID ده مش موجود في السيرفر الأساسي.");
+
+    // Accept raw user ID, <@USER_ID>, or <@!USER_ID>.
+    const userMatch = entry.match(/^(?:<@!?(\\d{17,20})>|(\\d{17,20}))$/);
+    if (userMatch) {
+      const userId = userMatch[1] || userMatch[2];
+      const member = await targetGuild.members.fetch(userId).catch(() => null);
+      if (member) {
+        if (!users.includes(userId)) {
+          users.push(userId);
+          contents.push("<@" + userId + ">");
+          descriptions.push("شخص: " + member.user.username + " (" + userId + ")");
+        }
+        continue;
+      }
+      // A plain numeric ID may instead be a role ID; explicit user mentions must resolve to a member.
+      if (entry.startsWith("<@")) throw new Error("الشخص بالـ ID ده مش موجود في السيرفر الأساسي: " + entry);
+    }
+
+    // Accept raw role ID or <@&ROLE_ID>.
+    const roleMatch = entry.match(/^(?:<@&(\\d{17,20})>|(\\d{17,20}))$/);
+    if (!roleMatch) {
+      throw new Error("المنشن غير صحيح: " + entry + ". افصل بين كل ID والتاني بفاصلة.");
+    }
+    const roleId = roleMatch[1] || roleMatch[2];
+    const role = await targetGuild.roles.fetch(roleId).catch(() => null);
+    if (!role) throw new Error("الشخص أو الرول بالـ ID ده مش موجود في السيرفر الأساسي: " + roleId);
+    if (!roles.includes(role.id)) {
+      roles.push(role.id);
+      contents.push("<@&" + role.id + ">");
+      descriptions.push("رول: " + role.name + " (" + role.id + ")");
+    }
   }
-  // Accept raw role ID or <@&ROLE_ID>.
-  const roleMatch = value.match(/^(?:<@&(\d{17,20})>|(\d{17,20}))$/);
-  if (!roleMatch) throw new Error("المنشن غير صحيح. اكتب everyone أو ID شخص أو ID رول، أو اترك الخانة فاضية.");
-  const roleId = roleMatch[1] || roleMatch[2];
-  const role = await targetGuild.roles.fetch(roleId).catch(() => null);
-  if (!role) throw new Error("الرول بالـ ID ده مش موجود في السيرفر الأساسي.");
+
   return {
-    content: "<@&" + role.id + ">",
-    allowedMentions: { parse: [], roles: [role.id] },
-    description: "رول: " + role.name + " (" + role.id + ")",
-    type: "role"
+    content: contents.join(" "),
+    allowedMentions: { parse: [], users, roles, ...(includesEveryone ? { parse: ["everyone"] } : {}) },
+    description: descriptions.join("\\n") || "بدون منشن",
+    type: includesEveryone ? "everyone" : users.length && roles.length ? "multiple" : users.length ? "user" : roles.length ? "role" : "none"
   };
 }
 
@@ -297,11 +324,11 @@ function buildConfirmRows(sessionId) {
 function buildMentionInput() {
   return new TextInputBuilder()
     .setCustomId("mention")
-    .setLabel("المنشن (فارغ / everyone / ID شخص / ID رول)")
+    .setLabel("منشن (IDs مفصولة بفواصل)")
     .setStyle(TextInputStyle.Short)
     .setRequired(false)
-    .setMaxLength(30)
-    .setPlaceholder("everyone أو ID شخص/رول");
+    .setMaxLength(1000)
+    .setPlaceholder("ID شخص, ID رول, ID شخص... أو everyone");
 }
 
 function buildNormalModal(sessionId) {
