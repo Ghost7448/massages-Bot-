@@ -351,7 +351,7 @@ function buildEmbedModal(sessionId) {
     .setStyle(TextInputStyle.Short)
     .setRequired(true)
     .setMaxLength(7)
-    .setValue("#5865F2")
+    .setValue("#992d22")
     .setPlaceholder("#FF0000");
 
   const image = new TextInputBuilder()
